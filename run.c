@@ -66,9 +66,9 @@ int count_max(char *sequence, int base)
 #define count(...) CONCAT(count_, METRIC)(__VA_ARGS__)
 
 // Get the total repeat count by summing the count of each item.
-int accumulate(char *sequence, int length)
+long long accumulate_trunc(char *sequence, int length)
 {
-    int sum = 0;
+    long long sum = 0;
     for (int i = 0; i < length; i++)
     {
         sum += count(sequence, i);
@@ -194,7 +194,7 @@ void merge_ref(char *sequence, int length, reference_t *reference)
     if (length <= reference->length)
     {
         sequence_t *sequences = reference->sequences;
-        int repeat = accumulate(sequence, length);
+        int repeat = accumulate_trunc(sequence, length);
         if (repeat < sequences[length - 1].repeat)
         {
             sequences[length - 1].repeat = repeat;
@@ -214,7 +214,7 @@ void merge_ref(char *sequence, int length, reference_t *reference)
     else if (length == reference->length + 1)
     {
         sequence_t *sequences = realloc(reference->sequences, (length + 1) * sizeof(sequence_t));
-        sequences[length - 1].repeat = accumulate(sequence, length);
+        sequences[length - 1].repeat = accumulate_trunc(sequence, length);
         sequences[length - 1].sequence = malloc(length * sizeof(char));
         memcpy(sequences[length - 1].sequence, sequence, length * sizeof(char));
         reference->length = length;
@@ -385,7 +385,7 @@ void run(int offset, int repeat, char *sequence, int length, reference_t read, r
     iterate(&state, offset, repeat, .0, .5);
     memcpy(sequence, state.found, sizeof(char) * length);
     print(state.found, length, stdout);
-    repeat = accumulate(sequence, length);
+    repeat = accumulate_trunc(sequence, length);
     printf(" len=%d rep=%d cnt=%lld ", length, repeat, state.count);
     print_ref(sequence, length, repeat, stdout, read);
     printf("                \n");
@@ -415,7 +415,7 @@ void scan(int start, base_t base, reference_t read, reference_t *write)
         for (int b = 0; b < base.length; b++)
         {
             int offset = parse(base.prefixes[b], sequence, length);
-            int repeat = accumulate(sequence, offset);
+            int repeat = accumulate_trunc(sequence, offset);
             run(offset, repeat, sequence, length, read, write);
         }
     }
@@ -431,7 +431,7 @@ void snake(int start, int ahead, const char *base, reference_t read, reference_t
     }
     char sequence[MAX] = {0};
     parse(base, sequence, start - ahead);
-    int repeat = accumulate(sequence, start - ahead);
+    int repeat = accumulate_trunc(sequence, start - ahead);
     for (int length = start; length <= MAX; length++)
     {
         int offset = length - ahead;
@@ -446,12 +446,20 @@ void check(reference_t read)
 {
     for (int length = 1; length <= read.length; length++)
     {
-        int repeat = accumulate(read.sequences[length - 1].sequence, length);
+        int repeat = accumulate_trunc(read.sequences[length - 1].sequence, length);
         if (repeat != read.sequences[length - 1].repeat)
         {
             printf("!! len=%d rep=%d ref=%d\n", length, repeat, read.sequences[length - 1].repeat);
         }
     }
+}
+
+#define LOG(length) (log(length) / log(CHARSET_LENGTH))
+
+// Estimate the repeat count for an theoreticaly optimal sequence of the given length, based on truncated sum metric.
+int optimal_sum(int length)
+{
+    return (double)length * (length - 1) / 2 * (length + CHARSET_LENGTH - 4) / length / (CHARSET_LENGTH - 1) - LOG(length) * (length - LOG(length) + CHARSET_LENGTH - 3) / 2;
 }
 
 // Provide a few metrics to estimate bound values.
@@ -479,7 +487,7 @@ void bound(reference_t reference)
         printf("%d max_add=%d\n", length, max_add);
         if (sum != reference.sequences[length - 1].repeat)
         {
-            printf("!! %d: %d != %d\n", length, sum, reference.sequences[length - 1].repeat);
+            printf("!! %d: %d != %d (%d)\n", length, sum, reference.sequences[length - 1].repeat, optimal_sum(length));
         }
     }
     max_add = 0;
@@ -490,7 +498,7 @@ void bound(reference_t reference)
         {
             max_add = bound4;
         }
-        printf("%d\t%d\t%d\n", length, max[length - 1], reference.sequences[length - 1].repeat);
+        printf("%d\t%d\t%d\t%d\n", length, max[length - 1], reference.sequences[length - 1].repeat, optimal_sum(length));
     }
     printf("max_add=%d\n", max_add);
 }
@@ -498,7 +506,7 @@ void bound(reference_t reference)
 // Estimate the repeat count for a random sequence of the given length, using sum metric.
 int estimate_sum(int length)
 {
-    return (length - 1) * (length - 2) / 2;
+    return (length - 1) * (length + CHARSET_LENGTH - 4) / (CHARSET_LENGTH - 1) / 2;
 }
 
 // Estimate the repeat count for a random sequence of the given length, using minus one metric.
@@ -566,14 +574,14 @@ void debruijn(int ahead, reference_t read, reference_t *write)
 {
     char a[MAX] = {0};
     char sequence[MAX] = {0};
-    int max = log(MAX) / log(CHARSET_LENGTH);
+    int max = LOG(MAX);
     for (int n = 1; n <= max; n++)
     {
         memset(a, 0, CHARSET_LENGTH * n * sizeof(char));
         int length = (int)pow(CHARSET_LENGTH, n);
         db(1, 1, n, a, sequence);
         print(sequence, length, stdout);
-        int repeat = accumulate(sequence, length);
+        int repeat = accumulate_trunc(sequence, length);
         printf(" len=%d rep=%d ", length, repeat);
         print_ref(sequence, length, repeat, stdout, read);
         printf("\n");
@@ -581,9 +589,80 @@ void debruijn(int ahead, reference_t read, reference_t *write)
         if (ahead > 0)
         {
             int offset = length > ahead ? length - ahead : 0;
-            repeat = accumulate(sequence, offset);
+            repeat = accumulate_trunc(sequence, offset);
             run(offset, repeat, sequence, length, read, write);
         }
+    }
+}
+
+// Same as the sum metric, but using wrap-around instead of truncation
+long long accumulate_wrap(char *sequence, int length)
+{
+    long long count = 0;
+    for (int k = 1; k < length; k++)
+    {
+        for (int offset = k - 1; offset >= 0; offset--)
+        {
+            for (int i = offset, j = k, l = length; l > 0 && sequence[(i + length) % length] == sequence[(j + length) % length]; i--, j--, l--)
+            {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+#define EDGE trunc // trunc, wrap
+#define accumulate(...) CONCAT(accumulate_, EDGE)(__VA_ARGS__)
+
+#define MAX2 0x10000
+
+// Provides an overview of the closed form equations for repeat counts.
+void summary()
+{
+    char a[MAX2] = {0};
+    char sequence[MAX2] = {0};
+    int max = LOG(MAX2);
+    for (int n = 1; n <= max; n++)
+    {
+        int length = (int)pow(CHARSET_LENGTH, n);
+        double base = (double)length * (length - 1) / 2;
+        // zeros (max)
+        memset(sequence, 0, length * sizeof(char));
+        long long zeros = accumulate(sequence, length);
+        double zeros_closed = base * (length + 1) / 3; // trunc
+        // double zeros_closed = base * length; // wrap
+        // cyclic
+        for (int i = 0; i < length; i++)
+        {
+            sequence[i] = charset[i % CHARSET_LENGTH];
+        }
+        long long cyclic = accumulate(sequence, length);
+        double cyclic_closed = (double)length * (length - CHARSET_LENGTH) * (length * 2 - CHARSET_LENGTH + 3) / CHARSET_LENGTH / 12; // trunc
+        // double cyclic_closed = zeros_closed - (double)length * length * length * (CHARSET_LENGTH - 1) / CHARSET_LENGTH / 2; // wrap
+        // random
+        long long sum = 0;
+        srand(time(NULL));
+        for (int s = 0; s < SAMPLE_COUNT; s++)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                sequence[i] = charset[rand() / (RAND_MAX / CHARSET_LENGTH)];
+            }
+            sum += accumulate(sequence, length);
+        }
+        long long rnd = sum / SAMPLE_COUNT;
+        double rnd_closed = base * (length + CHARSET_LENGTH - 4) / length / (CHARSET_LENGTH - 1); // trunc
+        // double rnd_closed = base / (CHARSET_LENGTH - 1); // wrap
+        // de Bruijn (min)
+        memset(a, 0, CHARSET_LENGTH * n * sizeof(char));
+        db(1, 1, n, a, sequence);
+        long long repeat = accumulate(sequence, length);
+        double repeat_closed = rnd_closed - LOG(length) * (length - LOG(length) + CHARSET_LENGTH - 3) / 2; // trunc
+        // double repeat_closed = rnd_closed - (LOG(length) * length / 2); // wrap
+        // summary
+        printf("len=%d min=%lld,%.2f rnd=%lld,%.2f cyc=%lld,%.2f max=%lld,%.2f\n", length, repeat, repeat_closed, rnd, rnd_closed, cyclic, cyclic_closed, zeros, zeros_closed);
+        // printf("len=%d min=%.4f->%.2f rnd=%.4f~=%.2f cyc=%.4f->%.2f max=%.4f==1\n", length, repeat/base, 1./(CHARSET_LENGTH - 1), rnd/base, 1./(CHARSET_LENGTH - 1), cyclic/zeros_closed, 1 - (CHARSET_LENGTH - 1.0) / CHARSET_LENGTH, zeros/zeros_closed);
     }
 }
 
@@ -602,6 +681,7 @@ int main()
     // bound(read);
     // sample();
     // debruijn(30, read, &write);
+    // summary();
 
     return 0;
 }

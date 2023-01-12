@@ -459,7 +459,7 @@ void check(reference_t read)
 // Estimate the repeat count for an theoreticaly optimal sequence of the given length, based on truncated sum metric.
 int optimal_sum(int length)
 {
-    return (double)length * (length - 1) / 2 * (length + CHARSET_LENGTH - 4) / length / (CHARSET_LENGTH - 1) - LOG(length) * (length - LOG(length) + CHARSET_LENGTH - 3) / 2;
+    return ((double)(length - 1) * (length + CHARSET_LENGTH - 4) / (CHARSET_LENGTH - 1) - LOG(length) * (length - LOG(length) + CHARSET_LENGTH - 3)) / 2;
 }
 
 // Provide a few metrics to estimate bound values.
@@ -523,8 +523,8 @@ int estimate_max(int length)
 
 #define estimate(...) CONCAT(estimate_, METRIC)(__VA_ARGS__)
 #define SAMPLE_COUNT 100000
-// Estimate the repeat count for a random sequence of the given length.
 
+// Estimate the repeat count for a random sequence of the given length.
 void sample()
 {
     char sequence[MAX] = {0};
@@ -640,7 +640,7 @@ void summary()
         }
         long long cyclic = accumulate(sequence, length);
         double cyclic_closed = (double)length * (length - CHARSET_LENGTH) * (length * 2 - CHARSET_LENGTH + 3) / CHARSET_LENGTH / 12; // trunc
-        // double cyclic_closed = zeros_closed - (double)length * length * length * (CHARSET_LENGTH - 1) / CHARSET_LENGTH / 2; // wrap
+        // double cyclic_closed = (double)length * length * (length - CHARSET_LENGTH) / CHARSET_LENGTH / 2; // wrap
         // text
         FILE *file = fopen("file.txt", "r");
         fread(buffer, sizeof(char), (length + 7) / 8, file);

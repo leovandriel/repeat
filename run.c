@@ -622,6 +622,7 @@ void summary()
 {
     char a[MAX2] = {0};
     char sequence[MAX2] = {0};
+    char buffer[MAX2 * 8] = {0};
     int max = LOG(MAX2);
     for (int n = 1; n <= max; n++)
     {
@@ -640,6 +641,16 @@ void summary()
         long long cyclic = accumulate(sequence, length);
         double cyclic_closed = (double)length * (length - CHARSET_LENGTH) * (length * 2 - CHARSET_LENGTH + 3) / CHARSET_LENGTH / 12; // trunc
         // double cyclic_closed = zeros_closed - (double)length * length * length * (CHARSET_LENGTH - 1) / CHARSET_LENGTH / 2; // wrap
+        // text
+        FILE *file = fopen("file.txt", "r");
+        fread(buffer, sizeof(char), (length + 7) / 8, file);
+        fclose(file);
+        memset(sequence, 0, length * sizeof(char));
+        for (int i = 0; i < length; i++)
+        {
+            sequence[i] = buffer[i / 8] >> (7 - i % 8) & 1;
+        }
+        long long text_repeat = accumulate(sequence, length);
         // random
         long long sum = 0;
         srand(time(NULL));
@@ -661,9 +672,34 @@ void summary()
         double repeat_closed = rnd_closed - LOG(length) * (length - LOG(length) + CHARSET_LENGTH - 3) / 2; // trunc
         // double repeat_closed = rnd_closed - (LOG(length) * length / 2); // wrap
         // summary
-        printf("len=%d min=%lld,%.2f rnd=%lld,%.2f cyc=%lld,%.2f max=%lld,%.2f\n", length, repeat, repeat_closed, rnd, rnd_closed, cyclic, cyclic_closed, zeros, zeros_closed);
-        // printf("len=%d min=%.4f->%.2f rnd=%.4f~=%.2f cyc=%.4f->%.2f max=%.4f==1\n", length, repeat/base, 1./(CHARSET_LENGTH - 1), rnd/base, 1./(CHARSET_LENGTH - 1), cyclic/zeros_closed, 1 - (CHARSET_LENGTH - 1.0) / CHARSET_LENGTH, zeros/zeros_closed);
+        printf("len=%d min=%lld,%.2f rnd=%lld,%.2f text=%lld cyc=%lld,%.2f max=%lld,%.2f\n", length, repeat, repeat_closed, rnd, rnd_closed, text_repeat, cyclic, cyclic_closed, zeros, zeros_closed);
+        // printf("len=%d min=%.4f->%.2f rnd=%.4f~=%.2f text=%.4f cyc=%.4f->%.2f max=%.4f==1\n", length, repeat/base, 1./(CHARSET_LENGTH - 1), rnd/base, 1./(CHARSET_LENGTH - 1), text_repeat/base, cyclic/zeros_closed, 1 - (CHARSET_LENGTH - 1.0) / CHARSET_LENGTH, zeros/zeros_closed);
     }
+}
+
+// Computes the repeat count for a binary (or text) sequence read from a file.
+void file(const char *filename, int max)
+{
+    FILE *file = fopen(filename, "r");
+    fseek(file, 0L, SEEK_END);
+    int size = ftell(file) + 1;
+    size = size < (max + 7) / 8 ? size : (max + 7) / 8;
+    char *buffer = malloc(size * sizeof(char));
+    fseek(file, 0L, SEEK_SET);
+    size = fread(buffer, sizeof(char), size, file);
+    fclose(file);
+    int length = max < size * 8 ? max : size * 8;
+    char *sequence = malloc(length * sizeof(char));
+    for (int i = 0; i < length; i++)
+    {
+        sequence[i] = buffer[i / 8] >> (7 - i % 8) & 1;
+    }
+    free(buffer);
+    long long repeat = accumulate(sequence, length);
+    free(sequence);
+    long long random = (long long)length * (length - 1) / 2;
+    double relative = (double)repeat / random;
+    printf("len=%d rep=%lld rel=%.3f\n", length, repeat, relative);
 }
 
 int main()
@@ -682,6 +718,7 @@ int main()
     // sample();
     // debruijn(30, read, &write);
     // summary();
+    // file("file.txt", 0x800);
 
     return 0;
 }
